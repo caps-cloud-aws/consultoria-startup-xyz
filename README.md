@@ -1,72 +1,64 @@
-# CAPS · Gestão de Documentos para IA — Startup XYZ
+# Startup XYZ - Gestão de documentos para IA
 
-> **CAPS — Consultoria de Arquitetura, Preservação e Segurança**
-> Proposta de arquitetura serverless na AWS para a **Startup XYZ**: guardar todo o acervo de documentos dos clientes como base de treino de IA, sem que o armazenamento permanente torne o negócio inviável.
+Proposta de arquitetura da CAPS (Consultoria de Arquitetura, Preservação e Segurança) para a Startup XYZ.
 
-![AWS](https://img.shields.io/badge/AWS-Serverless-FF9900?logo=amazonwebservices&logoColor=white)
-![Regiões](https://img.shields.io/badge/Regi%C3%B5es-us--east--1%20%7C%20us--west--2-232F3E)
-![DR](https://img.shields.io/badge/DR-Pilot%20Light-blue)
-![Custo](https://img.shields.io/badge/Custo%20m%C3%AAs%2024-US%24%20199%2C63-success)
+TCC do curso AWS Re/Starter & No Code, Escola da Nuvem, turma BRSAO 253, Grupo 5.
 
-Trabalho de conclusão do curso **AWS Re/Starter & No Code** — Escola da Nuvem, turma **BRSAO 253** · Grupo 5 · 2026
+Documentos da entrega:
 
----
+- [TCC](docs/TCC_Startup_XYZ.docx)
+- [Documento de arquitetura](docs/Arquitetura-Startup-XYZ.docx)
+- [Apresentação](apresentacao/Apresentacao_XYZ.pptx)
+- [Diagrama](arquitetura/arquitetura-startup-xyz.drawio)
+- [Estimativas de custo](custos/)
 
-## Sumário
+## Contexto
 
-- [O desafio](#o-desafio)
-- [A solução em uma frase](#a-solução-em-uma-frase)
-- [Diagrama da arquitetura](#diagrama-da-arquitetura)
-- [Fluxo de um documento](#fluxo-de-um-documento)
-- [Serviços e responsabilidades](#serviços-e-responsabilidades)
-- [Requisitos × onde são atendidos](#requisitos--onde-são-atendidos)
-- [Decisões de arquitetura e alternativas descartadas](#decisões-de-arquitetura-e-alternativas-descartadas)
-- [Alta disponibilidade e recuperação de desastre](#alta-disponibilidade-e-recuperação-de-desastre)
-- [Escalabilidade](#escalabilidade)
-- [Estimativa de custo](#estimativa-de-custo)
-- [Limites assumidos](#limites-assumidos)
-- [Estrutura do repositório](#estrutura-do-repositório)
-- [Equipe](#equipe)
+A Startup XYZ tem um agente de IA que extrai dados de documentos enviados pelos clientes. Esses documentos não podem ser apagados, porque vão ser usados no treino dos próximos modelos.
 
----
+Premissas que usamos:
 
-## O desafio
+- 50 mil arquivos novos por mês, 5 MB em média (250 GB/mês, 3 TB no fim do primeiro ano)
+- 50 mil downloads por mês
+- o cliente acessa o próprio arquivo por 12 meses
+- depois de 365 dias o arquivo vai para a classe mais fria do S3
+- nenhum arquivo é apagado pela aplicação
 
-A Startup XYZ lançou um agente de IA que extrai dados de documentos enviados pelos próprios clientes (modelo SaaS). Esse acervo é o ativo de treinamento dos próximos modelos.
+Também era preciso isolar um cliente do outro, aguentar a queda de uma AZ, ter uma região reserva e estimar o custo antes de implantar.
 
-| Premissa | Valor |
+O case sugere como ponto de partida API Gateway, S3 e Lambda. Mantivemos os três e acrescentamos os serviços necessários para que o isolamento, a retenção, a falha de função e a perda de região fossem de fato resolvidos.
+
+### Requisitos e onde são atendidos
+
+| Requisito | Como foi resolvido |
 |---|---|
-| Arquivos novos por mês | **50 mil** (PDFs e imagens) |
-| Tamanho médio | **5 MB** → **250 GB/mês** → **3 TB** ao fim do 1º ano |
-| Downloads por mês | 50 mil (250 GB de saída) |
-| Acesso do cliente | **12 meses** após o envio |
-| Exclusão de arquivos | **Nenhuma** no fluxo da aplicação |
-| Após 365 dias | Mover para a **camada de armazenamento mais fria** |
+| Isolar os clientes | Prefixo `users/{sub}/` montado na Lambda a partir do token do Cognito |
+| Não apagar | Versionamento, Object Lock e bucket policy negando DELETE |
+| Acesso por 1 ano | S3 Standard por 365 dias |
+| Classe mais fria depois de 1 ano | Lifecycle para o Deep Archive |
+| Queda de AZ | Serviços gerenciados em 3 AZs |
+| Queda de região | Réplicas em us-west-2, failover no Route 53 e API recriada pelo CloudFormation |
+| Falha de função | SQS com DLQ e alarme. O arquivo já está no S3 |
+| Custo | Estimativa na Pricing Calculator e alerta no Budgets |
 
-Requisitos não funcionais: isolamento total entre clientes, tolerância à queda de uma zona de disponibilidade, região reserva para desastre, elasticidade e custo estimado antes da implantação.
+## Arquitetura
 
-## A solução em uma frase
+![Diagrama da arquitetura](arquitetura/arquitetura-startup-xyz.jpg)
 
-O cliente se autentica no **Cognito**, pede uma **URL pré-assinada** à API, envia o arquivo **direto ao S3**, e um fluxo assíncrono (**EventBridge → SQS → Lambda**) registra os metadados no **DynamoDB**. No dia 365 o **Lifecycle** move o objeto para o **Glacier Deep Archive**. Tudo é replicado para **us-west-2** e nada é apagado.
+O fonte do diagrama está em [arquitetura/arquitetura-startup-xyz.drawio](arquitetura/arquitetura-startup-xyz.drawio) e abre no draw.io.
 
-## Diagrama da arquitetura
+Legenda das setas:
 
-![Arquitetura da Startup XYZ](arquitetura/arquitetura-startup-xyz.jpg)
+- preta: requisição entre serviços
+- verde tracejada: cliente acessando o S3 direto pela URL pré-assinada
+- vermelha tracejada: caminho de falha (DLQ, alarme, e-mail)
+- laranja tracejada: replicação entre regiões (S3 CRR, DynamoDB Global Tables, réplica do Cognito)
+- roxa tracejada: failover de DNS no Route 53
+- cinza: recursos que só existem depois do failover
 
-> Arquivo-fonte editável: [`arquitetura/arquitetura-startup-xyz.drawio`](arquitetura/arquitetura-startup-xyz.drawio) (abrir em [app.diagrams.net](https://app.diagrams.net)).
+Resumindo: serverless, região primária em us-east-1 (3 AZs) e us-west-2 em pilot light. O arquivo nunca passa pela API nem pela Lambda. A API só devolve uma URL pré-assinada e o cliente fala direto com o S3.
 
-**Legenda das setas**
-
-| Seta | Significado |
-|---|---|
-| Preta contínua | Requisição entre serviços |
-| Verde tracejada | Acesso direto do cliente ao S3 via URL pré-assinada |
-| Vermelha tracejada | Caminho de falha e alerta (DLQ → alarme → e-mail) |
-| Laranja tracejada | Replicação entre regiões (S3 CRR, DynamoDB Global Tables, Cognito multi-Region) |
-| Roxa tracejada | Failover de DNS pelo Route 53 |
-| Cinza contínua | Ligação que só passa a existir no failover (criada pelo CloudFormation) |
-
-## Fluxo de um documento
+### Fluxo
 
 ```mermaid
 sequenceDiagram
@@ -75,186 +67,169 @@ sequenceDiagram
     participant COG as Cognito
     participant R53 as Route 53
     participant API as WAF + API Gateway
-    participant LURL as Lambda (URL)
-    participant S3 as S3 us-east-1
+    participant LURL as Lambda API
+    participant S3 as S3
     participant EB as EventBridge
-    participant SQS as SQS (+ DLQ)
-    participant LMD as Lambda (metadados)
+    participant SQS as SQS
+    participant LMD as Lambda metadados
     participant DDB as DynamoDB
 
-    C->>COG: Login
-    COG-->>C: JWT (claim sub)
+    C->>COG: login
+    COG-->>C: JWT
     C->>R53: api.startupxyz.com
-    R53-->>C: Região saudável
-    C->>API: Pedido de URL + JWT
-    API->>LURL: JWT validado pelo authorizer
-    LURL-->>C: URL pré-assinada (5 min) em users/{sub}/arquivo
-    C->>S3: PUT/GET direto (o arquivo não passa pela Lambda)
-    S3->>EB: ObjectCreated
-    EB->>SQS: Regra encaminha só a criação
-    SQS->>LMD: Mensagem
-    LMD->>DDB: Grava metadado (idempotente)
-    Note over SQS,LMD: Falhou até o maxReceiveCount → DLQ → alarme CloudWatch → e-mail SNS
+    R53-->>C: região ativa
+    C->>API: pede URL (JWT)
+    API->>LURL: token validado
+    LURL-->>C: URL de 5 min em users/{sub}/
+    C->>S3: PUT / GET direto
+    S3->>EB: Object Created
+    EB->>SQS: evento
+    SQS->>LMD: mensagem
+    LMD->>DDB: grava metadado
+    Note over SQS,LMD: se falhar várias vezes vai para a DLQ e dispara alarme por e-mail
 ```
 
-## Serviços e responsabilidades
+1. O cliente faz login no Cognito e recebe o JWT.
+2. Chama `api.startupxyz.com`. O Route 53 resolve para a região que está respondendo.
+3. O WAF filtra a requisição e o API Gateway valida o token com o authorizer do Cognito.
+4. A Lambda da API lê o `sub` do token, monta o prefixo `users/{sub}/` e devolve uma URL pré-assinada de 5 minutos. O prefixo nunca vem do app. A listagem dos arquivos do usuário sai do DynamoDB, pela mesma Lambda.
+5. O cliente faz o upload ou o download direto no S3.
+6. O S3 publica o `Object Created` no EventBridge, que manda para o SQS.
+7. A Lambda de metadados consome a fila e grava no DynamoDB. Ela é idempotente, então reprocessar a mesma mensagem não duplica registro.
 
-Cada serviço tem **um único trabalho**.
+### Serviços
 
-| Camada | Serviço | Papel na solução |
-|---|---|---|
-| Entrada | **Amazon Route 53** | Um único endereço (`api.startupxyz.com`), registro de failover e health check HTTPS em `/health` a cada 30 s |
-| Identidade | **Amazon Cognito User Pool** | Login e JWT. O `sub` do token vira o prefixo do usuário no S3. Plano Essentials com réplica multi-região |
-| Proteção | **AWS WAF** | Web ACL regional na REST API e no Cognito (regra de taxa + grupo gerenciado). Não inspeciona o PDF |
-| Proteção | **AWS Shield Standard** | DDoS na borda, sem custo |
-| API | **Amazon API Gateway (REST)** | Authorizer do Cognito, throttling, domínio próprio, rota `/health` sem autenticação |
-| Processamento | **AWS Lambda — URL** (ARM) | Só assina: lê o `sub`, monta o prefixo, devolve PUT/GET válido por 5 min |
-| Processamento | **AWS Lambda — metadados** (ARM, 256 MB) | Consome a fila e grava o índice de forma idempotente |
-| Armazenamento | **Amazon S3** | Privado, Block Public Access, só HTTPS, versionado, SSE-S3, Object Lock (Governance, 7 anos), DELETE negado na policy. Lifecycle: Standard 365 dias → Deep Archive |
-| Armazenamento | **S3 Cross-Region Replication** | Cada objeto novo vai para us-west-2 em minutos. Legado entra por Batch Replication |
-| Integração | **Amazon EventBridge** | Recebe `ObjectCreated` do bucket e encaminha ao SQS |
-| Integração | **Amazon SQS + DLQ** | Absorve picos; mensagem volta à fila se a função falhar; esgotadas as tentativas, vai à DLQ |
-| Índice | **Amazon DynamoDB** | Partition key `userId` (= `sub`), on-demand, PITR, Global Tables para o Oregon |
-| Observabilidade | **CloudWatch + SNS** | Métricas, logs e alarme da DLQ enviado por e-mail |
-| Governança | **CloudTrail** | Trilha multi-região de eventos de gerenciamento |
-| Governança | **IAM** | Menor privilégio: a role só alcança o prefixo que a própria função calculou |
-| Governança | **AWS Budgets** | Alerta de teto de custo |
-| Segurança | **AWS KMS** | Chave multi-região (primária + réplica) |
-| Segurança | **ACM** | Certificado público do domínio da API |
-| Automação | **AWS CloudFormation** | As duas regiões nascem do mesmo código; a API do Oregon sobe daqui no failover |
-
-## Requisitos × onde são atendidos
-
-| Requisito | Como a arquitetura responde |
+| Serviço | Uso |
 |---|---|
-| Isolar o cliente | Prefixo = `sub` do token, calculado na Lambda — nunca um campo enviado pelo app |
-| Não apagar | Versionamento + Object Lock Governance + policy negando DELETE |
-| Esfriar no dia 365 | S3 Lifecycle por idade → Glacier Deep Archive |
-| Queda de zona | Serviços gerenciados já são multi-AZ (3 zonas) |
-| Queda de região | Réplicas no Oregon + failover pelo Route 53 + API via CloudFormation |
-| Falha de função | Fila + DLQ + alarme; o PDF já está no S3 |
-| Custo visível | AWS Pricing Calculator + AWS Budgets |
+| Route 53 | Registro de failover e health check em `/health` a cada 30s |
+| Cognito User Pool | Login e JWT. Plano Essentials com réplica em us-west-2 |
+| WAF | Web ACL regional na API e no Cognito, com rate limit e regras gerenciadas |
+| Shield Standard | DDoS na borda (já vem ativo) |
+| API Gateway (REST) | Authorizer do Cognito, throttling, domínio próprio. A rota `/health` não exige token, porque é o alvo do health check |
+| Lambda (API) | Gera a URL pré-assinada e lista os arquivos do usuário. ARM |
+| Lambda (metadados) | Consome o SQS e grava no DynamoDB. ARM, 256 MB |
+| S3 | Bucket privado, só HTTPS, versionado, SSE-S3, Object Lock Governance de 7 anos, DELETE negado na bucket policy |
+| S3 Lifecycle | Standard por 365 dias, depois Deep Archive |
+| S3 CRR | Replica os objetos novos para us-west-2. O bucket de destino também é versionado e tem Object Lock. Os objetos antigos entram por Batch Replication |
+| EventBridge | Recebe o evento de criação do bucket |
+| SQS + DLQ | Desacopla o S3 da Lambda e segura a mensagem quando a função falha |
+| DynamoDB | Índice dos arquivos. PK `userId` (o `sub`), on-demand, PITR, Global Tables |
+| CloudWatch + SNS | Logs, métricas e alarme da DLQ por e-mail |
+| CloudTrail | Trilha multi-região só de eventos de gerenciamento |
+| KMS | Chave multi-região (primária e réplica), usada na criptografia do Cognito |
+| IAM | A role da Lambda só tem acesso a `users/*`. O isolamento por usuário é feito no código, pelo `sub` |
+| ACM | Certificado do domínio da API |
+| Budgets | Alerta de custo |
+| CloudFormation | Mesma infra nas duas regiões. A API do Oregon sobe por aqui no failover |
 
-## Decisões de arquitetura e alternativas descartadas
+## Decisões
 
-| Decisão | Alternativa descartada | Motivo |
+**URL pré-assinada em vez de mandar o arquivo pela Lambda.** O API Gateway aceita até 10 MB de payload e a Lambda síncrona até 6 MB. Passar o arquivo pela função também aumentaria o custo de execução, sem melhorar o isolamento.
+
+**REST API em vez de HTTP API.** No API Gateway, o WAF só pode ser associado à REST API. Nesse volume a diferença de preço é de centavos.
+
+**Deep Archive em vez de Glacier Instant Retrieval.** O case pede a classe mais fria, e Instant Retrieval não é. O restore em Bulk leva de 12 a 48h, o que serve para o treino. O cliente só acessa arquivos com menos de um ano.
+
+**Lifecycle em vez de Intelligent-Tiering.** O Intelligent-Tiering move por acesso e o case pede por idade. Ele ainda cobra monitoramento por objeto.
+
+**Object Lock em Governance, não Compliance.** Compliance não pode ser revertido por ninguém. Isso complicaria um pedido futuro de exclusão (LGPD, por exemplo).
+
+**SQS entre o S3 e a Lambda.** Chamar a Lambda direto pelo evento funciona enquanto tudo dá certo. Com a fila, a mensagem fica esperando se a função cair e vai para a DLQ se continuar falhando.
+
+**DynamoDB em vez de listar o prefixo no S3.** A tabela guarda o estado (ativo ou arquivado) e evita varrer o bucket a cada listagem.
+
+**SSE-S3 em vez de SSE-KMS no objeto.** Nenhum requisito pede chave própria para os arquivos. O SSE-S3 já criptografa em repouso sem custo extra, enquanto o SSE-KMS acrescentaria chamadas cobradas ao KMS (menos com S3 Bucket Key, mas ainda assim um custo e uma chave a mais para gerenciar).
+
+**CloudTrail sem data events.** Registrar cada leitura do S3 seria cobrado por request.
+
+**us-east-1 em vez de São Paulo.** É mais barato e o case não exige que o dado fique no Brasil. Se exigir, muda a região e o desenho continua o mesmo.
+
+**Pilot light em vez de active-active ou warm standby.** Manter a segunda região ligada duplicaria API, Lambda e WAF o tempo todo, e o case pede só uma região reserva.
+
+## Disponibilidade e DR
+
+Dentro da região, S3, Lambda, API Gateway, SQS e DynamoDB já rodam em 3 AZs. Não implantamos nada por zona.
+
+Entre regiões o modelo é pilot light:
+
+| | us-east-1 | us-west-2 |
 |---|---|---|
-| Upload/download por **URL pré-assinada** | Arquivo passando pela Lambda | Limite de 10 MB no API Gateway e 6 MB na Lambda síncrona; mais custo de duração; nenhum ganho de isolamento |
-| **REST API** | HTTP API | O WAF regional só se associa à REST; diferença de preço de centavos neste volume |
-| **Deep Archive** | Glacier Instant Retrieval | Instant Retrieval não é a classe mais fria pedida pelo case |
-| **Lifecycle por idade** | Intelligent-Tiering | Move por acesso, não por idade, e cobra monitoramento por objeto |
-| **Object Lock Governance** | Compliance | Compliance é irreversível e inviabilizaria um pedido futuro (ex.: LGPD) |
-| **SQS + DLQ** | Lambda invocada direto pelo evento do S3 | Sem fila, não há onde a mensagem esperar quando a função está em erro |
-| **DynamoDB** como índice | Listar o prefixo do S3 a cada consulta | Perde o estado (ativo/arquivado) e exige varrer o bucket |
-| **Pilot light** | Active-active / warm standby | Duplicaria API, Lambda e WAF com custo permanente que o case não pede |
-| **SSE-S3** no objeto | SSE-KMS por objeto | KMS cobraria request em cada um dos 50 mil downloads |
-| **CloudTrail sem data events** | Registrar cada leitura do S3 | Cobrado por request; o acesso já é controlado pela URL assinada |
-| **us-east-1** | sa-east-1 (São Paulo) | Preço menor e o case não fixa país; a troca seria de região, não de desenho |
+| S3 | ativo | réplica (CRR) |
+| DynamoDB | ativo | réplica (Global Tables) |
+| Cognito | ativo | réplica |
+| API Gateway, Lambdas, WAF | ativo | não existe até o failover |
 
-## Alta disponibilidade e recuperação de desastre
+Se a us-east-1 cair, os dados já estão no Oregon. A API de lá é criada pelo CloudFormation e o Route 53 passa a apontar para ela.
 
-**Nível 1 — dentro da região:** S3, Lambda, API Gateway, SQS e DynamoDB já se distribuem por três zonas de disponibilidade. Não há máquina para religar.
+- **RPO:** minutos para os arquivos. A replicação do S3 é assíncrona, então o que estava sendo copiado na hora da falha pode faltar. Metadados (Global Tables) e usuários (réplica do Cognito) ficam quase em tempo real.
+- **RTO:** horas. A subida da API secundária não é automática.
 
-**Nível 2 — entre regiões (pilot light em us-west-2):**
+Outros cenários de falha:
 
-| Componente | us-east-1 (primária) | us-west-2 (secundária) |
-|---|---|---|
-| S3 (arquivos) | Ativo | **Ligado** — réplica via CRR |
-| DynamoDB (índice) | Ativo | **Ligado** — Global Tables |
-| Cognito (usuários) | Ativo | **Ligado** — multi-Region replication |
-| API Gateway, Lambdas, WAF | Ativo | **Desligado** — sobe via CloudFormation no failover |
-
-| O que cai | O que acontece |
-|---|---|
-| Lambda da URL | O cliente não recebe link novo e tenta de novo; o PDF continua no S3 |
-| Lambda de metadados | A mensagem volta à fila; no limite vai à DLQ e o alarme envia e-mail. O índice pode ser reconstruído pelo prefixo |
-| Uma zona | A execução segue nas outras |
-| A região | O arquivo já está no Oregon; o Route 53 vira o DNS e a API sobe do CloudFormation |
-
-| Meta | Valor | Observação |
-|---|---|---|
-| **RPO** | Minutos | Replicação assíncrona: o que estava em trânsito pode faltar |
-| **RTO** | Horas | DNS vira e a API reserva é criada deliberadamente |
-| Restore do acervo frio | 12 a 48 h (Bulk) | Só para treino; o cliente acessa apenas o último ano |
+- **Lambda da API fora:** o cliente não consegue link novo e tenta de novo. Os arquivos que já estão no S3 não são afetados.
+- **Lambda de metadados fora:** a mensagem volta para a fila e, depois do `maxReceiveCount`, vai para a DLQ com alarme. O índice pode ser reconstruído a partir do prefixo no S3.
+- **Uma AZ fora:** os serviços continuam nas outras duas.
 
 ## Escalabilidade
 
-A arquitetura cresce com o arquivo, não com servidor: API Gateway, Lambda e DynamoDB on-demand cobram por uso, o S3 não tem teto de capacidade e a fila absorve picos de eventos.
+Nada é provisionado. API Gateway, Lambda, SQS e DynamoDB on-demand escalam com o uso e cobram por requisição.
 
-| Serviço | Limite de referência |
-|---|---|
-| API Gateway | 10.000 req/s por conta e região (ajustável) |
-| Lambda | 1.000 execuções simultâneas por região (cota aumentável) |
-| S3 | 3.500 escritas e 5.500 leituras por segundo **por prefixo** — como cada usuário tem o próprio prefixo, a carga se espalha |
+Limites que olhamos:
 
-**Ponto de atenção:** a cota de concorrência da Lambda na conta.
+- API Gateway: 10.000 req/s por conta/região (ajustável)
+- Lambda: 1.000 execuções simultâneas por região (dá para pedir aumento)
+- S3: 3.500 PUT e 5.500 GET por segundo por prefixo. Como cada usuário tem o seu prefixo, a carga se distribui.
 
-## Estimativa de custo
+O limite que mais preocupa é a concorrência da Lambda.
 
-Valores da AWS Pricing Calculator (us-east-1 + us-west-2), com 50 mil uploads, 50 mil downloads, 5 MB por arquivo, 250 GB de saída e health check a cada 30 s. **Nenhum serviço do desenho foi retirado da conta.**
+## Custo
 
-| Período | Custo mensal (USD) |
+Estimativa feita na AWS Pricing Calculator para as duas regiões, com preços de outubro de 2026. Premissas: 50 mil uploads e 50 mil downloads de 5 MB, 250 GB de saída e health check a cada 30s.
+
+| Período | USD/mês |
 |---|---:|
-| Mês 1 | ~60,53 |
+| Mês 1 | 60,53 |
 | Mês 6 | 118,32 |
-| Mês 12 | **187,68** |
-| **Soma do ano 1** (meses 1 a 12) | **1.489,20** |
-| Mês 24 em diante | **199,63** |
-| Desastre (pontual, fora da fatura) | 49,60 — dos quais 38,84 só se houver restore Bulk de 3 TB |
+| Mês 12 | 187,68 |
+| Mês 24 em diante | 199,63 |
+| Total do ano 1 | 1.489,20 |
 
-**Por que a conta estabiliza?** Todo mês entram 250 GB no Standard e saem 250 GB que completaram 365 dias. A janela quente fica fixa em **3 TB por região**; o que cresce é o Deep Archive, a ~US$ 1 por TB/mês.
+O custo para de crescer a partir do segundo ano. Todo mês entram 250 GB no Standard e saem 250 GB que completaram 365 dias. O Standard fica estável em 3 TB por região e só o Deep Archive cresce, a cerca de US$ 1 por TB por mês.
 
-**Onde está o dinheiro (mês 24):** os dois S3 Standard (~US$ 138) e a saída para a internet (US$ 22,50). Lambda, SQS e DynamoDB juntos ficam abaixo de US$ 3.
+Quase toda a conta é S3 Standard nas duas regiões (cerca de US$ 138) mais a transferência de saída (US$ 22,50). Lambda, SQS e DynamoDB juntos ficam abaixo de US$ 3.
 
-Detalhamento por serviço em [`custos/`](custos/).
+Um evento de desastre custa US$ 49,60, cobrado só no mês em que acontecer. Desse valor, US$ 38,84 são a restauração em Bulk de 3 TB, que só acontece se o treino precisar do acervo frio.
 
-## Limites assumidos
+Os relatórios da calculadora estão em [custos/](custos/).
 
-- A queda da região primária interrompe o acesso por **horas**, até a API secundária subir — o arquivo não se perde.
-- RPO **não é zero**: objetos em trânsito no momento da falha podem faltar na réplica.
-- O WAF protege a API e o login, mas **não inspeciona o PDF** (que vai direto ao S3 pela URL assinada).
-- A trilha do CloudTrail não registra cada leitura de objeto (decisão de custo).
-- Exclusão por LGPD **não é um clique no app**: exige decisão jurídica e permissão de bypass, fora do fluxo da aplicação.
-- **Não há aplicação publicada.** Esta entrega demonstra a decisão de arquitetura, o desenho e a estimativa.
+## Limitações
 
-## Estrutura do repositório
+- Se a us-east-1 cair, o acesso fica fora por algumas horas. Os arquivos não se perdem.
+- Durante o failover, o login funciona com o mesmo usuário e senha. Cadastro novo, troca de senha e MFA TOTP só voltam quando a região primária voltar, porque a réplica do Cognito não aceita escrita.
+- O RPO não é zero.
+- O WAF não inspeciona os arquivos, porque o upload vai direto para o S3.
+- O CloudTrail não registra quem leu cada objeto.
+- A exclusão a pedido do titular (LGPD) não pode ser feita pelo app. Ela depende de decisão jurídica e da permissão de bypass do Object Lock.
+- Não há aplicação publicada. O trabalho cobre o desenho, as decisões e a estimativa de custo.
+
+## Estrutura
 
 ```
-consultoria-startup-xyz/
-├── README.md
-├── docs/
-│   ├── TCC_Startup_XYZ.docx              # Trabalho completo (ABNT)
-│   └── Arquitetura-Startup-XYZ.docx      # Documento técnico da arquitetura
-├── arquitetura/
-│   ├── arquitetura-startup-xyz.drawio    # Diagrama editável
-│   └── arquitetura-startup-xyz.jpg       # Diagrama exportado
-├── apresentacao/
-│   └── Apresentacao_XYZ.pptx             # Deck para a banca (15 slides)
-└── custos/
-    ├── 01-ano1-meses-01-a-11.pdf
-    ├── 02-ano1-mes-12.pdf
-    ├── 03-ano2-em-diante.pdf
-    └── 04-desastre-e-recuperacao.pdf
+docs/            TCC e documento de arquitetura
+arquitetura/     diagrama (.drawio e .jpg)
+apresentacao/    slides da apresentação
+custos/          estimativas da AWS Pricing Calculator
 ```
 
 ## Equipe
 
-**CAPS — Consultoria de Arquitetura, Preservação e Segurança** · Grupo 5
+Casthiel, Eliel, Evelyn, Kauan e Isac.
 
-| Integrante |
-|---|
-| Casthiel |
-| Eliel |
-| Evelyn |
-| Kauan |
-| Isac |
+Orientador: Adriano Torres
 
-**Orientador:** Adriano Torres
-**Curso:** AWS Re/Starter & No Code — Escola da Nuvem, turma BRSAO 253
+## Referências
 
-### Referências
-
-- [Amazon S3 — Managing the lifecycle of objects](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html)
+- [Managing the lifecycle of objects](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html)
 - [Amazon S3 Glacier storage classes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/glacier-storage-classes.html)
 - [Using S3 Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html)
 - [Replicating objects](https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html)
